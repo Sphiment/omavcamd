@@ -147,14 +147,28 @@ never writes into your Hyprland config.
 
 ### Snapping
 
-Drag the preview with `Super` and let go near a corner, an edge, or the middle
-of the screen, and it parks itself there — clear of the bar, with the same
-margin everywhere. Let go anywhere else and it stays exactly where you dropped
-it: the snap is a magnet with a range, not a grid you are stuck to.
+Drag the preview by its picture — plain left button, no modifier — and let go
+near a corner, an edge, or the middle of the screen, and it parks itself there:
+clear of the bar, with the same margin everywhere. Let go anywhere else and it
+stays exactly where you dropped it. The snap is a magnet with a range, not a
+grid you are stuck to.
+
+**Hold `Super` while you drag and nothing snaps at all.** That is the way to put
+the preview somewhere the magnet would otherwise pull it off: same drag you use
+on any other window, and it lands exactly where you let go.
 
 Wherever it ends up is remembered, so resizing it or closing and reopening it
 puts it back in the same place rather than returning it to the corner. Drag it
 onto a second monitor and it snaps to that monitor's edges.
+
+The snap happens when you let go, about a quarter of a second later — not while
+you are still dragging. Hyprland owns the window's position for as long as a
+drag is in progress and overwrites anything moved underneath it, so there is no
+sliding-into-place mid-drag to be had; what you get is the compositor's own move
+animation carrying it the last stretch.
+
+The scrcpy preview is the exception: clicks on it go to the phone, so `Super`
+is the only way to move that window and snapping stays on for it.
 
 Turn it off with `e` in the panel, from the plugin's settings, or from a
 terminal:
