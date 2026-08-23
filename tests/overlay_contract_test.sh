@@ -49,6 +49,9 @@ stable_media=no
 check "doctor polling does not recreate the overlay loader" "$stable_media"
 
 stable_capture_identity=no
+# These are deliberately literal source fragments, not expressions for this
+# test shell to expand.
+# shellcheck disable=SC2016
 [[ $cli == *'cmdline=$(tr'*'grep -q -- "--v4l2-sink=$DEVICE" <<<"$cmdline"'* ]] &&
   [[ $cli != *'tr '\''\\0'\'' '\'' '\'' </proc/"$pid"/cmdline | grep -q'* ]] &&
   stable_capture_identity=yes

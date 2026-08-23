@@ -920,6 +920,7 @@ cmd_start() {
   # later stop. The session child writes its own PID and then execs scrcpy, so
   # the recorded identity remains the real capture process. fd 9 is closed so
   # the long-lived capture cannot retain the action lock.
+  # shellcheck disable=SC2016 # $$/$1/$@ expand in the child shell, not here.
   setsid --fork sh -c \
     'printf "%s\n" "$$" >"$1"; shift; exec "$@"' \
     omavcam-capture "$PID_FILE" scrcpy "${args[@]}" \
