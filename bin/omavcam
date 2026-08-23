@@ -61,6 +61,7 @@ readonly PREVIEW_PID_FILE="$STATE_DIR/preview.pid"
 readonly PREVIEW_WATCH_PID_FILE="$STATE_DIR/preview-watch.pid"
 readonly PREVIEW_INPUT_CONF="$STATE_DIR/preview-input.conf"
 readonly PREVIEW_DRAG_FILE="$STATE_DIR/preview.drag"
+readonly PREVIEW_HYPR_SNAP_FILE="$STATE_DIR/hypr-snap.json"
 readonly PREVIEW_SIZE_FILE="$STATE_DIR/preview.size"
 
 # STATE_DIR lives under XDG_RUNTIME_DIR, which is tmpfs: nothing in it survives
@@ -74,7 +75,15 @@ readonly PREVIEW_SNAP_FILE="$CONFIG_DIR/preview.snap"
 # The preview window is identified by title, which both mpv and scrcpy can set,
 # so one set of Hyprland rules covers either source.
 readonly PREVIEW_TITLE="OmavcamPreview"
-readonly PREVIEW_MARGIN=40
+# The gap a parked preview keeps from whatever it is parked against, as parts
+# per thousand of the monitor's logical height. Proportional rather than fixed
+# so it looks the same on a 1080p laptop and a 4K desktop: 45/1000 is the 40px
+# this was hard-coded to, on the 900-logical-pixel screen it was written on.
+# Logical pixels already carry the display's scale, so a HiDPI panel gets the
+# same apparent gap rather than a hairline one.
+readonly PREVIEW_MARGIN_PER_MILLE=45
+readonly PREVIEW_MARGIN_MIN=24
+readonly PREVIEW_MARGIN_MAX=96
 
 # Where a preview can be parked: the four corners, the middle of each edge, and
 # the centre. Names rather than coordinates, because the coordinates are worked
@@ -924,6 +933,7 @@ cmd_stop() {
   # the node's format for whatever starts next. Neither depends on which source
   # is configured, so neither does this.
   loopback_preview_stop
+  hypr_snap_restore
 
   local pid
   if ! pid=$(capture_pid); then
@@ -1305,16 +1315,26 @@ monitor_box() {
     | @tsv'
 }
 
+preview_margin() {
+  local height="${1:-0}" margin
+  margin=$((height * PREVIEW_MARGIN_PER_MILLE / 1000))
+  ((margin < PREVIEW_MARGIN_MIN)) && margin=$PREVIEW_MARGIN_MIN
+  ((margin > PREVIEW_MARGIN_MAX)) && margin=$PREVIEW_MARGIN_MAX
+  printf '%s\n' "$margin"
+}
+
 # The rectangle a preview may occupy on a monitor: its logical size, less what
 # layer surfaces reserved — the Omarchy bar, mainly — and less the margin.
 # Without the reserved area the top anchors would tuck the window under the bar.
 usable_box() {
   local mx="$1" my="$2" mw="$3" mh="$4" rl="$5" rt="$6" rr="$7" rb="$8"
+  local margin
+  margin=$(preview_margin "$mh")
   printf '%s %s %s %s\n' \
-    $((mx + rl + PREVIEW_MARGIN)) \
-    $((my + rt + PREVIEW_MARGIN)) \
-    $((mw - rl - rr - 2 * PREVIEW_MARGIN)) \
-    $((mh - rt - rb - 2 * PREVIEW_MARGIN))
+    $((mx + rl + margin)) \
+    $((my + rt + margin)) \
+    $((mw - rl - rr - 2 * margin)) \
+    $((mh - rt - rb - 2 * margin))
 }
 
 # Where a window of this size sits when parked at an anchor. Pure arithmetic,
@@ -1462,6 +1482,79 @@ drag_should_snap() {
   marked=$(stat -c %Y "$PREVIEW_DRAG_FILE" 2>/dev/null) || return 1
   [[ $marked =~ ^[0-9]+$ ]] || return 1
   ((EPOCHSECONDS - marked <= PREVIEW_DRAG_GRACE))
+}
+
+# Hyprland has a magnet of its own for floating windows, and it runs inside the
+# drag: the window clings to an edge while it is still under the cursor. Nothing
+# watching from outside can imitate that — the compositor owns a window's
+# position for as long as a drag lasts — so omavcam turns Hyprland's on while
+# the preview is open and puts it back afterwards.
+#
+# What it cannot do is leave a gap: its monitor_gap is the distance at which the
+# magnet grabs, not the distance it leaves, so it parks flush against the edge.
+# The gap is omavcam's half of the job, applied when the drag ends, and eased by
+# the compositor's own move animation.
+#
+# It is a compositor-wide setting — every floating window snaps while the
+# preview is open — which is exactly why the previous values are saved rather
+# than assumed.
+hypr_set_snap() {
+  local enabled="$1" gap="$2" output
+
+  output=$(hyprctl repl "hl.config({ general = { snap = { enabled = $enabled, monitor_gap = $gap } } })" 2>&1) || output="error"
+  [[ $output != *error* ]] && return 0
+
+  # Older Hyprland, parsing its config the legacy way.
+  hyprctl keyword general:snap:enabled "$enabled" >/dev/null 2>&1 || true
+  hyprctl keyword general:snap:monitor_gap "$gap" >/dev/null 2>&1 || true
+}
+
+hypr_snap_apply() {
+  local gap="$1"
+  command -v hyprctl >/dev/null 2>&1 || return 0
+  have jq || return 0
+
+  # Read as text and checked, not with `jq -e`: a bool that is genuinely false
+  # exits non-zero there, which reads as "Hyprland does not have this option"
+  # and would switch the magnet off for everyone who had not already turned it
+  # on themselves — which is everyone.
+  local enabled_now gap_now
+  enabled_now=$(hyprctl getoption -j general:snap:enabled 2>/dev/null | jq -r '.bool | tostring' 2>/dev/null)
+  gap_now=$(hyprctl getoption -j general:snap:monitor_gap 2>/dev/null | jq -r '.int | tostring' 2>/dev/null)
+  [[ $enabled_now == true || $enabled_now == false ]] || return 0
+  [[ $gap_now =~ ^[0-9]+$ ]] || return 0
+
+  # Written once. Opening the preview twice must not record omavcam's own
+  # values as the ones to go back to.
+  if [[ ! -e $PREVIEW_HYPR_SNAP_FILE ]]; then
+    ensure_state_dir
+    jq -n --argjson enabled "$enabled_now" --argjson gap "$gap_now" \
+      '{enabled: $enabled, monitorGap: $gap}' >"$PREVIEW_HYPR_SNAP_FILE"
+  fi
+
+  hypr_set_snap true "$gap"
+}
+
+hypr_snap_restore() {
+  [[ -r $PREVIEW_HYPR_SNAP_FILE ]] || return 0
+  command -v hyprctl >/dev/null 2>&1 || return 0
+
+  local enabled gap
+  enabled=$(jq -r '.enabled' <"$PREVIEW_HYPR_SNAP_FILE" 2>/dev/null) || enabled=""
+  gap=$(jq -r '.monitorGap' <"$PREVIEW_HYPR_SNAP_FILE" 2>/dev/null) || gap=""
+  rm -f "$PREVIEW_HYPR_SNAP_FILE"
+
+  [[ $enabled == true || $enabled == false ]] || return 0
+  [[ $gap =~ ^[0-9]+$ ]] || gap=10
+  hypr_set_snap "$enabled" "$gap"
+}
+
+# The magnet's reach, on the monitor the preview is on: the same gap it will be
+# parked at, so it grabs about when the window reaches the place it is going.
+hypr_snap_gap() {
+  local mw mh
+  read -r mw mh < <(preview_target_monitor) || return 1
+  preview_margin "$mh"
 }
 
 # mpv is given its own bindings, written fresh each time the preview opens.
@@ -1801,6 +1894,7 @@ preview_start() {
     wait_for_preview
     preview_place "$size_name"
     preview_watch_start
+    preview_snap_enabled && hypr_snap_apply "$(hypr_snap_gap)"
     return 0
   fi
 
@@ -1825,6 +1919,7 @@ preview_start() {
   wait_for_preview
   preview_place "$size_name"
   preview_watch_start
+  preview_snap_enabled && hypr_snap_apply "$(hypr_snap_gap)"
   printf 'Preview open.\n'
 }
 
@@ -1840,6 +1935,7 @@ wait_for_preview() {
 
 preview_stop() {
   preview_watch_stop
+  hypr_snap_restore
   rm -f "$PREVIEW_DRAG_FILE"
 
   local source
@@ -1946,8 +2042,10 @@ cmd_preview() {
 
     if [[ $state == on ]]; then
       preview_watch_start
+      preview_running && hypr_snap_apply "$(hypr_snap_gap)"
     else
       preview_watch_stop
+      hypr_snap_restore
     fi
     printf '%s\n' "$state"
     ;;
@@ -2240,6 +2338,14 @@ cmd_snap_nearest() {
     "$(snap_target "$anchor" "$width" "$height" "$x" "$y" "$ux" "$uy" "$uw" "$uh")"
 }
 
+# The gap for a monitor of that logical height. Hidden, and used by the tests so
+# that they describe the rule rather than restate its arithmetic.
+cmd_snap_margin() {
+  (($# == 1)) || die "__snap-margin takes a monitor height"
+  [[ $1 =~ ^[0-9]+$ ]] || die "__snap-margin takes an integer, got: $1"
+  preview_margin "$1"
+}
+
 # Where a window of that size lands at that anchor, on those numbers. Hidden for
 # the same reason as __snap-nearest, and paired with it: one test can then move
 # a window to an anchor and check it is snapped back to the same one.
@@ -2279,6 +2385,7 @@ main() {
   status) cmd_status "$@" ;;
   preview) cmd_preview "$@" ;;
   __snap-nearest) cmd_snap_nearest "$@" ;;
+  __snap-margin) cmd_snap_margin "$@" ;;
   __snap-origin) cmd_snap_origin "$@" ;;
   help | --help | -h) usage ;;
   *)
