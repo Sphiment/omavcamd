@@ -92,6 +92,14 @@ jobs:
       - name: Run helper tests
         run: deno run --allow-read tests/model_test.js
 
+  overlay-contract:
+    name: Preview overlay ownership
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The overlay is singleton, capture-bound, and exact-device only
+        run: tests/overlay_contract_test.sh
+
   video-nr:
     name: OMAVCAM_VIDEO_NR validation
     runs-on: ubuntu-latest

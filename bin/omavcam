@@ -36,8 +36,12 @@ fi
 readonly VIDEO_NR
 readonly DEVICE="/dev/video${VIDEO_NR}"
 
-# scrcpy captures, adb finds the phone, v4l2loopback-dkms backs the node.
+# scrcpy captures, adb finds the phone, and v4l2loopback-dkms backs the node.
+# Qt Multimedia is a plugin dependency, but not a capture dependency: the CLI
+# and its mpv preview remain useful without an Omarchy shell.
 readonly REQUIRED_PACKAGES=(scrcpy android-tools v4l2loopback-dkms)
+readonly OVERLAY_PACKAGES=(qt6-multimedia)
+readonly ALL_PACKAGES=("${REQUIRED_PACKAGES[@]}" "${OVERLAY_PACKAGES[@]}")
 
 # max_openers above 1 is what lets the preview window read the same node the
 # meeting app is reading.
@@ -57,6 +61,7 @@ readonly STATE_DIR
 readonly PID_FILE="$STATE_DIR/capture.pid"
 readonly META_FILE="$STATE_DIR/capture.json"
 readonly LOG_FILE="$STATE_DIR/capture.log"
+readonly CAPTURE_LOCK_FILE="$STATE_DIR/capture.lock"
 readonly PREVIEW_PID_FILE="$STATE_DIR/preview.pid"
 readonly PREVIEW_WATCH_PID_FILE="$STATE_DIR/preview-watch.pid"
 readonly PREVIEW_INPUT_CONF="$STATE_DIR/preview-input.conf"
@@ -268,6 +273,7 @@ conf_matches() {
 # Collects the whole picture once, so the human and JSON renderings can never
 # disagree about what was observed.
 declare -a MISSING_PACKAGES=()
+declare -a MISSING_REQUIRED_PACKAGES=()
 declare -a ISSUES=()
 STATE_MODULE_AVAILABLE=false
 STATE_MODULE_LOADED=false
@@ -279,7 +285,7 @@ STATE_HEADERS_PACKAGE=""
 STATE_HEADERS_INSTALLED=false
 
 # code|severity|message — severity is "blocked" when omavcam cannot capture at
-# all, "warn" when it works but something will not survive a reboot.
+# all, "warn" when capture works but an optional surface or persistence does not.
 add_issue() {
   ISSUES+=("$1|$2|$3")
 }
@@ -287,6 +293,12 @@ add_issue() {
 inspect() {
   local pkg
   for pkg in "${REQUIRED_PACKAGES[@]}"; do
+    if ! pkg_installed "$pkg"; then
+      MISSING_PACKAGES+=("$pkg")
+      MISSING_REQUIRED_PACKAGES+=("$pkg")
+    fi
+  done
+  for pkg in "${OVERLAY_PACKAGES[@]}"; do
     pkg_installed "$pkg" || MISSING_PACKAGES+=("$pkg")
   done
 
@@ -307,9 +319,14 @@ inspect() {
     STATE_PERSISTED=true
   fi
 
-  if ((${#MISSING_PACKAGES[@]} > 0)); then
+  if ((${#MISSING_REQUIRED_PACKAGES[@]} > 0)); then
     add_issue missing-packages blocked \
-      "Missing packages: ${MISSING_PACKAGES[*]}"
+      "Missing packages: ${MISSING_REQUIRED_PACKAGES[*]}"
+  fi
+
+  if ((${#MISSING_PACKAGES[@]} > ${#MISSING_REQUIRED_PACKAGES[@]})); then
+    add_issue missing-overlay-package warn \
+      "qt6-multimedia is missing, so the shell preview overlay is unavailable"
   fi
 
   if [[ $STATE_HEADERS_INSTALLED == false ]]; then
@@ -317,7 +334,7 @@ inspect() {
       "$STATE_HEADERS_PACKAGE is not installed, so DKMS cannot build $MODULE for the running kernel"
   fi
 
-  if [[ ${#MISSING_PACKAGES[@]} -eq 0 && $STATE_MODULE_AVAILABLE == false ]]; then
+  if [[ ${#MISSING_REQUIRED_PACKAGES[@]} -eq 0 && $STATE_MODULE_AVAILABLE == false ]]; then
     add_issue module-unavailable blocked \
       "$MODULE is installed but not built for the running kernel — check 'dkms status'"
   fi
@@ -364,7 +381,7 @@ doctor_json() {
   )
 
   packages_json=$(
-    for pkg in "${REQUIRED_PACKAGES[@]}"; do
+    for pkg in "${ALL_PACKAGES[@]}"; do
       jq -n --arg n "$pkg" --argjson i "$(pkg_installed "$pkg" && echo true || echo false)" \
         '{name: $n, installed: $i}'
     done | jq -s '.'
@@ -402,7 +419,7 @@ doctor_human() {
   local mark
   printf 'omavcam doctor\n\n'
 
-  for pkg in "${REQUIRED_PACKAGES[@]}"; do
+  for pkg in "${ALL_PACKAGES[@]}"; do
     pkg_installed "$pkg" && mark='+' || mark='-'
     printf '  [%s] %s\n' "$mark" "$pkg"
   done
@@ -521,6 +538,7 @@ cmd_setup() {
   printf '\n'
   ISSUES=()
   MISSING_PACKAGES=()
+  MISSING_REQUIRED_PACKAGES=()
   STATE_PERSISTED=false
   inspect
   doctor_human
@@ -605,12 +623,15 @@ ensure_config_dir() {
 # the file behind. Confirm the process is alive and is actually our capture by
 # looking for our own sink in its command line.
 capture_pid() {
-  local pid
+  local pid cmdline
   [[ -r $PID_FILE ]] || return 1
   read -r pid <"$PID_FILE" || return 1
   [[ $pid =~ ^[0-9]+$ ]] || return 1
   [[ -r /proc/$pid/cmdline ]] || return 1
-  tr '\0' ' ' </proc/"$pid"/cmdline | grep -q -- "--v4l2-sink=$DEVICE" || return 1
+  # Do not pipe into grep -q under pipefail: grep exits as soon as it matches,
+  # which can SIGPIPE the writer and randomly make a valid PID look stale.
+  cmdline=$(tr '\0' ' ' </proc/"$pid"/cmdline) || return 1
+  grep -q -- "--v4l2-sink=$DEVICE" <<<"$cmdline" || return 1
   printf '%s\n' "$pid"
 }
 
@@ -620,6 +641,20 @@ capture_running() {
 
 clear_state() {
   rm -f "$PID_FILE" "$META_FILE"
+}
+
+# Start/restart/stop all read and then mutate the same PID and metadata files.
+# Serialize the whole operation so two panel events cannot both observe idle,
+# launch competing scrcpy processes, and let the loser erase the winner's
+# ownership state. Nested calls (restart -> stop -> start) retain one lock.
+CAPTURE_LOCKED=false
+capture_lock() {
+  [[ $CAPTURE_LOCKED == true ]] && return 0
+  ensure_state_dir
+  have flock || die "flock is required to serialize capture actions"
+  exec 9>"$CAPTURE_LOCK_FILE"
+  flock -x 9
+  CAPTURE_LOCKED=true
 }
 
 # With exclusive_caps=1 the node only advertises Video Capture while something
@@ -804,6 +839,7 @@ cmd_cameras() {
 # ----------------------------------------------------------------- start ----
 
 cmd_start() {
+  capture_lock
   local serial="" facing="front" camera_id="" size="" fps="" v4l2_buffer="" show_window=false
   while (($# > 0)); do
     case "$1" in
@@ -879,9 +915,30 @@ cmd_start() {
 
   printf 'Starting capture from %s on %s\n' "$serial" "$DEVICE"
 
-  setsid scrcpy "${args[@]}" >"$LOG_FILE" 2>&1 &
-  local pid=$!
-  printf '%s\n' "$pid" >"$PID_FILE"
+  # `setsid program &` may fork when its launcher is already a process-group
+  # leader, making $! a short-lived setsid PID rather than the program we must
+  # later stop. The session child writes its own PID and then execs scrcpy, so
+  # the recorded identity remains the real capture process. fd 9 is closed so
+  # the long-lived capture cannot retain the action lock.
+  # shellcheck disable=SC2016 # $$/$1/$@ expand in the child shell, not here.
+  setsid --fork sh -c \
+    'printf "%s\n" "$$" >"$1"; shift; exec "$@"' \
+    omavcam-capture "$PID_FILE" scrcpy "${args[@]}" \
+    9>&- >"$LOG_FILE" 2>&1 &
+
+  local pid="" pid_waited=0
+  while ((pid_waited < 20)); do
+    pid=$(capture_pid || true)
+    [[ -n $pid ]] && break
+    sleep 0.05
+    pid_waited=$((pid_waited + 1))
+  done
+  if [[ -z $pid ]]; then
+    printf 'scrcpy did not publish its process identity:\n\n' >&2
+    tail -n 20 "$LOG_FILE" >&2
+    clear_state
+    return 1
+  fi
 
   jq -n \
     --arg serial "$serial" \
@@ -927,6 +984,7 @@ cmd_start() {
 # ------------------------------------------------------------------ stop ----
 
 cmd_stop() {
+  capture_lock
   (($# == 0)) || die "stop takes no options"
 
   # A reader left attached strands an mpv showing a frozen last frame, and pins
@@ -997,6 +1055,9 @@ cmd_status() {
   done
 
   have jq || die "jq is required"
+  # Status removes stale ownership state, so it must not inspect the files
+  # while start/restart/stop is between publishing steps.
+  capture_lock
 
   local pid running=false streaming=false meta='{}'
   if pid=$(capture_pid); then
@@ -1004,9 +1065,10 @@ cmd_status() {
     [[ -r $META_FILE ]] && meta=$(cat "$META_FILE")
   else
     pid=""
-    # A pid file with no live process behind it is stale; drop it so the next
-    # start is not refused by a capture that is not there.
-    clear_state
+    # Status is observational. A stale file does not block the next start:
+    # capture_running validates it, and start replaces it while holding the
+    # action lock. Removing it here lets overlapping status polls erase a new
+    # capture's identity between its publication steps.
   fi
   device_streaming && streaming=true
 
@@ -2073,6 +2135,7 @@ cmd_preview() {
 # "stop; start": a panel that omits --size means "leave it alone", while one
 # that sends --size "" means "back to the camera default".
 cmd_restart() {
+  capture_lock
   local set_serial=false set_facing=false set_camera=false set_size=false set_fps=false
   local serial="" facing="" camera_id="" size="" fps=""
   local want_window=""
@@ -2214,7 +2277,7 @@ cmd_uninstall() {
   printf '  %s\n' "$MODPROBE_CONF"
   printf '  %s\n' "$MODULES_LOAD_CONF"
   printf 'and unloads the %s module if nothing else is using it.\n' "$MODULE"
-  [[ $keep_packages == false ]] && printf 'It also removes: %s\n' "${REQUIRED_PACKAGES[*]}"
+  [[ $keep_packages == false ]] && printf 'It also removes: %s\n' "${ALL_PACKAGES[*]}"
   printf '\n'
 
   if [[ $assume_yes == false ]]; then
@@ -2245,8 +2308,8 @@ cmd_uninstall() {
   fi
 
   if [[ $keep_packages == false ]]; then
-    printf 'Removing packages: %s\n' "${REQUIRED_PACKAGES[*]}"
-    sudo pacman -Rs --noconfirm "${REQUIRED_PACKAGES[@]}" || true
+    printf 'Removing packages: %s\n' "${ALL_PACKAGES[*]}"
+    sudo pacman -Rs --noconfirm "${ALL_PACKAGES[@]}" || true
   fi
 
   rm -rf "$STATE_DIR" "$CONFIG_DIR"
