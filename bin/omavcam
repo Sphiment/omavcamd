@@ -1003,7 +1003,16 @@ cmd_status() {
 
   if [[ $as_json == true ]]; then
     local preview_open=false
-    preview_running && preview_open=true
+    if preview_running; then
+      preview_open=true
+      # The panel polls this every few seconds, which makes it the one heartbeat
+      # the preview already has. If the window is open and snapping is on but
+      # nothing is watching for drags — the watcher was killed, or the preview
+      # came back by a route that did not start one — this is where it is
+      # noticed and put right, rather than the next time someone reopens the
+      # preview by hand.
+      preview_watch_start
+    fi
     jq -n \
       --argjson running "$running" \
       --argjson streaming "$streaming" \
@@ -1096,6 +1105,20 @@ preview_client() {
   command -v hyprctl >/dev/null 2>&1 || return 1
   hyprctl clients -j 2>/dev/null |
     jq -cer --arg t "$PREVIEW_TITLE" 'first(.[] | select(.title == $t)) // empty' 2>/dev/null
+}
+# Which source the preview that is open right now came from, as opposed to the
+# one the settings would open next. The two differ at exactly one moment — while
+# the source is being switched — and that is the moment a stop that trusted the
+# setting would reach for the wrong process and take the capture down with it.
+preview_running_source() {
+  local client class
+  client=$(preview_client) || return 1
+  class=$(jq -r '.class // empty' <<<"$client")
+  if [[ $class == scrcpy ]]; then
+    printf 'scrcpy\n'
+  else
+    printf 'loopback\n'
+  fi
 }
 
 preview_pid() {
@@ -1533,11 +1556,21 @@ preview_watch_loop() {
   local x y width height monitor_id address
   local previous="" settled="" resolved=""
   local still=0 interval="$PREVIEW_WATCH_IDLE" snapping_drag=unknown
+  local missed=0
 
   while preview_snap_enabled; do
+    # A reading can fail without the window being gone — the compositor is busy,
+    # the socket is slow, the window is mid-remap on a source switch. Exiting on
+    # the first miss meant the watcher could quietly disappear and leave the
+    # preview un-snapping with nothing to show why, so it takes three in a row
+    # to count as "the window is gone".
     if ! read -r x y width height monitor_id address < <(preview_geometry); then
-      break
+      missed=$((missed + 1))
+      ((missed >= 3)) && break
+      sleep "$PREVIEW_WATCH_IDLE"
+      continue
     fi
+    missed=0
 
     # Size and monitor belong in the sample: a resize or a move to another
     # screen changes where the anchors are, so both have to reopen the question
@@ -1809,7 +1842,10 @@ preview_stop() {
   preview_watch_stop
   rm -f "$PREVIEW_DRAG_FILE"
 
-  if [[ $PREVIEW_SOURCE == scrcpy ]]; then
+  local source
+  source=$(preview_running_source 2>/dev/null) || source="$PREVIEW_SOURCE"
+
+  if [[ $source == scrcpy ]]; then
     capture_running && restart_capture_with_window false
     rm -f "$PREVIEW_PID_FILE"
     return 0
