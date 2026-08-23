@@ -161,11 +161,24 @@ Wherever it ends up is remembered, so resizing it or closing and reopening it
 puts it back in the same place rather than returning it to the corner. Drag it
 onto a second monitor and it snaps to that monitor's edges.
 
-The snap happens when you let go, about a quarter of a second later — not while
-you are still dragging. Hyprland owns the window's position for as long as a
-drag is in progress and overwrites anything moved underneath it, so there is no
-sliding-into-place mid-drag to be had; what you get is the compositor's own move
-animation carrying it the last stretch.
+Snapping happens in two halves, because the compositor owns a window's position
+for as long as a drag lasts and overwrites anything moved underneath it. So the
+magnet you feel *while* dragging is Hyprland's own — omavcam switches
+`general:snap` on while the preview is open and puts your previous setting back
+when it closes. Note that this is compositor-wide: every floating window snaps
+while the preview is up.
+
+Hyprland's magnet parks a window flush against the edge, which is not where a
+preview wants to sit, and its `monitor_gap` is the distance at which the magnet
+grabs rather than the distance it leaves. So the gap is omavcam's half: when you
+let go, the preview settles into place a fraction of a second later, carried
+there by the compositor's own move animation.
+
+That gap scales with the screen rather than being a fixed number of pixels —
+4.5% of the monitor's logical height, between 24 and 96 pixels, which is 40 on a
+1600x900 desktop and 48 on a 4K one at 200% scale. Logical pixels already carry
+the display's scale, so a HiDPI panel gets the same apparent gap instead of a
+hairline.
 
 The two drags are told apart by mpv rather than guessed at: a plain click lands
 on the preview's own window, so mpv marks it and starts the move itself, while a

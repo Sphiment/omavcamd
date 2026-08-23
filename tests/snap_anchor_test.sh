@@ -13,9 +13,14 @@ cd "$(dirname "$0")/.." || exit 1
 readonly OMAVCAM=bin/omavcam
 
 # A 2560x1440 desktop with a 40px bar reserved at the top, and a 640x360
-# preview on it. The margin the CLI keeps is 40.
+# preview on it. The margin is proportional to the monitor's height, so it is
+# asked for rather than written down — the point of these checks is the rule,
+# not its arithmetic.
 readonly SCREEN=(0 0 2560 1440 0 40 0 0)
 readonly WINDOW=(640 360)
+readonly BAR=40
+MARGIN=$("$OMAVCAM" __snap-margin 1440)
+readonly MARGIN
 
 readonly ANCHORS=(
   top-left top top-right
@@ -46,20 +51,25 @@ nearest() {
 
 printf 'Each anchor is inside the bar and the margin\n'
 
-# The usable box is the screen less the bar and a 40px margin on every side:
-# x 40..2520, y 80..1400. Nothing may be placed outside it.
+# The usable box is the screen less the bar and the margin on every side.
+# Nothing may be placed outside it.
+readonly LEFT=$MARGIN
+readonly RIGHT=$((2560 - MARGIN))
+readonly TOP=$((BAR + MARGIN))
+readonly BOTTOM=$((1440 - MARGIN))
+
 for anchor in "${ANCHORS[@]}"; do
   read -r x y < <(origin "$anchor")
   inside=yes
-  ((x >= 40 && x + WINDOW[0] <= 2520)) || inside=no
-  ((y >= 80 && y + WINDOW[1] <= 1400)) || inside=no
+  ((x >= LEFT && x + WINDOW[0] <= RIGHT)) || inside=no
+  ((y >= TOP && y + WINDOW[1] <= BOTTOM)) || inside=no
   check "$anchor is within the usable box" yes "$inside"
 done
 
 # The top row must clear the bar, which is the whole point of reading the
 # reserved area rather than the raw monitor rectangle.
 read -r _ y < <(origin top)
-check "top clears the reserved bar" 80 "$y"
+check "top clears the reserved bar" "$TOP" "$y"
 
 read -r x _ < <(origin center)
 check "center is centred horizontally" 960 "$x"
@@ -85,6 +95,13 @@ check "one pixel past the threshold does not snap" none "$(nearest "$((x + 173))
 check "one pixel inside the threshold snaps" \
   "center $x $y" "$(nearest "$((x + 171))" "$y")"
 
+printf '\nThe gap grows with the screen, and never runs away with it\n'
+
+check "a laptop panel gets a modest gap" 30 "$("$OMAVCAM" __snap-margin 675)"
+check "a 1440p screen gets a bigger one" 64 "$("$OMAVCAM" __snap-margin 1440)"
+check "an enormous screen is capped" 96 "$("$OMAVCAM" __snap-margin 4000)"
+check "a tiny screen still gets a usable gap" 24 "$("$OMAVCAM" __snap-margin 100)"
+
 printf '\nAn oversized preview keeps the axis it overflows\n'
 
 # `original` on a phone that out-resolves the monitor: 4080x3060 on 2048x1152.
@@ -94,9 +111,11 @@ check "a window larger than the screen never snaps" none \
 
 # Only the width overflows: the vertical edges still snap, and the horizontal
 # position the user dragged to is preserved rather than pulled to a corner.
+small_margin=$("$OMAVCAM" __snap-margin 1152)
+bottom_edge=$((40 + small_margin + (1152 - 40 - 2 * small_margin) - 400))
 read -r anchor x y < <("$OMAVCAM" __snap-nearest 0 0 2048 1152 0 40 0 0 4080 400 -300 700)
 check "a too-wide window keeps its x" "-300" "$x"
-check "a too-wide window still snaps to the bottom edge" 712 "$y"
+check "a too-wide window still snaps to the bottom edge" "$bottom_edge" "$y"
 check "a too-wide window reports the bottom edge, not a corner" bottom "$anchor"
 
 printf '\nBad input is refused\n'
