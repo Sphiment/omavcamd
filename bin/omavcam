@@ -61,7 +61,6 @@ readonly PREVIEW_PID_FILE="$STATE_DIR/preview.pid"
 readonly PREVIEW_WATCH_PID_FILE="$STATE_DIR/preview-watch.pid"
 readonly PREVIEW_INPUT_CONF="$STATE_DIR/preview-input.conf"
 readonly PREVIEW_DRAG_FILE="$STATE_DIR/preview.drag"
-readonly PREVIEW_HYPR_SNAP_FILE="$STATE_DIR/hypr-snap.json"
 readonly PREVIEW_SIZE_FILE="$STATE_DIR/preview.size"
 
 # STATE_DIR lives under XDG_RUNTIME_DIR, which is tmpfs: nothing in it survives
@@ -157,7 +156,8 @@ Commands:
   restart [options] Apply new settings to a running capture
   stop              Stop streaming
   status [--json]   Report whether a capture is running
-  preview <action>  on, off, toggle, reopen, move <anchor>, resize <preset>,\n                    or snap on|off|toggle|status
+  preview <action>  on, off, toggle, reopen, move <anchor>, resize <preset>,
+                    or snap on|off|toggle|status
   help              Show this message
 
 Start options:
@@ -933,7 +933,6 @@ cmd_stop() {
   # the node's format for whatever starts next. Neither depends on which source
   # is configured, so neither does this.
   loopback_preview_stop
-  hypr_snap_restore
 
   local pid
   if ! pid=$(capture_pid); then
@@ -1484,77 +1483,11 @@ drag_should_snap() {
   ((EPOCHSECONDS - marked <= PREVIEW_DRAG_GRACE))
 }
 
-# Hyprland has a magnet of its own for floating windows, and it runs inside the
-# drag: the window clings to an edge while it is still under the cursor. Nothing
-# watching from outside can imitate that — the compositor owns a window's
-# position for as long as a drag lasts — so omavcam turns Hyprland's on while
-# the preview is open and puts it back afterwards.
-#
-# What it cannot do is leave a gap: its monitor_gap is the distance at which the
-# magnet grabs, not the distance it leaves, so it parks flush against the edge.
-# The gap is omavcam's half of the job, applied when the drag ends, and eased by
-# the compositor's own move animation.
-#
-# It is a compositor-wide setting — every floating window snaps while the
-# preview is open — which is exactly why the previous values are saved rather
-# than assumed.
-hypr_set_snap() {
-  local enabled="$1" gap="$2" output
-
-  output=$(hyprctl repl "hl.config({ general = { snap = { enabled = $enabled, monitor_gap = $gap } } })" 2>&1) || output="error"
-  [[ $output != *error* ]] && return 0
-
-  # Older Hyprland, parsing its config the legacy way.
-  hyprctl keyword general:snap:enabled "$enabled" >/dev/null 2>&1 || true
-  hyprctl keyword general:snap:monitor_gap "$gap" >/dev/null 2>&1 || true
-}
-
-hypr_snap_apply() {
-  local gap="$1"
-  command -v hyprctl >/dev/null 2>&1 || return 0
-  have jq || return 0
-
-  # Read as text and checked, not with `jq -e`: a bool that is genuinely false
-  # exits non-zero there, which reads as "Hyprland does not have this option"
-  # and would switch the magnet off for everyone who had not already turned it
-  # on themselves — which is everyone.
-  local enabled_now gap_now
-  enabled_now=$(hyprctl getoption -j general:snap:enabled 2>/dev/null | jq -r '.bool | tostring' 2>/dev/null)
-  gap_now=$(hyprctl getoption -j general:snap:monitor_gap 2>/dev/null | jq -r '.int | tostring' 2>/dev/null)
-  [[ $enabled_now == true || $enabled_now == false ]] || return 0
-  [[ $gap_now =~ ^[0-9]+$ ]] || return 0
-
-  # Written once. Opening the preview twice must not record omavcam's own
-  # values as the ones to go back to.
-  if [[ ! -e $PREVIEW_HYPR_SNAP_FILE ]]; then
-    ensure_state_dir
-    jq -n --argjson enabled "$enabled_now" --argjson gap "$gap_now" \
-      '{enabled: $enabled, monitorGap: $gap}' >"$PREVIEW_HYPR_SNAP_FILE"
-  fi
-
-  hypr_set_snap true "$gap"
-}
-
-hypr_snap_restore() {
-  [[ -r $PREVIEW_HYPR_SNAP_FILE ]] || return 0
-  command -v hyprctl >/dev/null 2>&1 || return 0
-
-  local enabled gap
-  enabled=$(jq -r '.enabled' <"$PREVIEW_HYPR_SNAP_FILE" 2>/dev/null) || enabled=""
-  gap=$(jq -r '.monitorGap' <"$PREVIEW_HYPR_SNAP_FILE" 2>/dev/null) || gap=""
-  rm -f "$PREVIEW_HYPR_SNAP_FILE"
-
-  [[ $enabled == true || $enabled == false ]] || return 0
-  [[ $gap =~ ^[0-9]+$ ]] || gap=10
-  hypr_set_snap "$enabled" "$gap"
-}
-
-# The magnet's reach, on the monitor the preview is on: the same gap it will be
-# parked at, so it grabs about when the window reaches the place it is going.
-hypr_snap_gap() {
-  local mw mh
-  read -r mw mh < <(preview_target_monitor) || return 1
-  preview_margin "$mh"
+# The mpv script that binds the preview's left button, shipped beside the CLI.
+preview_script() {
+  local self
+  self=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null) || self="${BASH_SOURCE[0]}"
+  printf '%s/mpv/preview.lua\n' "${self%/bin/omavcam}"
 }
 
 # mpv is given its own bindings, written fresh each time the preview opens.
@@ -1894,7 +1827,6 @@ preview_start() {
     wait_for_preview
     preview_place "$size_name"
     preview_watch_start
-    preview_snap_enabled && hypr_snap_apply "$(hypr_snap_gap)"
     return 0
   fi
 
@@ -1906,20 +1838,28 @@ preview_start() {
   rm -f "$PREVIEW_DRAG_FILE"
   preview_write_input_conf
 
+  # The script is what reports the end of a drag. Without it the preview still
+  # works and still snaps, just on the watcher's timing rather than on the
+  # button coming up, so a missing file is worth carrying on without.
+  local script=""
+  [[ -r $(preview_script) ]] && script=$(preview_script)
+
   # Reading the node rather than the phone means the preview shows exactly the
   # frames the meeting app receives — same crop, same orientation, same lag.
-  setsid mpv "av://v4l2:$DEVICE" \
+  setsid env "OMAVCAM_CLI=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")" \
+    "OMAVCAM_DRAG_MARK=$PREVIEW_DRAG_FILE" \
+    mpv "av://v4l2:$DEVICE" \
     --profile=low-latency --untimed --no-cache \
     --title="$PREVIEW_TITLE" --wayland-app-id="$(preview_app_id "$size_name")" \
     --no-border --no-audio --no-osc --osd-level=0 --really-quiet \
     --window-dragging=yes --input-conf="$PREVIEW_INPUT_CONF" \
+    ${script:+--script="$script"} \
     >/dev/null 2>&1 &
   printf '%s\n' "$!" >"$PREVIEW_PID_FILE"
 
   wait_for_preview
   preview_place "$size_name"
   preview_watch_start
-  preview_snap_enabled && hypr_snap_apply "$(hypr_snap_gap)"
   printf 'Preview open.\n'
 }
 
@@ -1935,7 +1875,6 @@ wait_for_preview() {
 
 preview_stop() {
   preview_watch_stop
-  hypr_snap_restore
   rm -f "$PREVIEW_DRAG_FILE"
 
   local source
@@ -2028,7 +1967,18 @@ cmd_preview() {
       printf 'on\n'
       return 0
       ;;
-    *) die "preview snap takes on, off, toggle, or status" ;;
+    now)
+      # Called by the preview's own mpv the instant its drag ends, so the window
+      # is placed as the button comes up rather than a fraction of a second
+      # later when a poller notices it has stopped moving. The watcher stays as
+      # the fallback, for every other way a preview can be moved.
+      preview_snap_enabled || return 0
+      preview_running || return 0
+      rm -f "$PREVIEW_DRAG_FILE"
+      preview_snap_now >/dev/null || true
+      return 0
+      ;;
+    *) die "preview snap takes on, off, toggle, now, or status" ;;
     esac
 
     preview_snap_save "$state"
@@ -2042,10 +1992,8 @@ cmd_preview() {
 
     if [[ $state == on ]]; then
       preview_watch_start
-      preview_running && hypr_snap_apply "$(hypr_snap_gap)"
     else
       preview_watch_stop
-      hypr_snap_restore
     fi
     printf '%s\n' "$state"
     ;;

@@ -161,20 +161,20 @@ Wherever it ends up is remembered, so resizing it or closing and reopening it
 puts it back in the same place rather than returning it to the corner. Drag it
 onto a second monitor and it snaps to that monitor's edges.
 
-Snapping happens in two halves, because the compositor owns a window's position
-for as long as a drag lasts and overwrites anything moved underneath it. So the
-magnet you feel *while* dragging is Hyprland's own — omavcam switches
-`general:snap` on while the preview is open and puts your previous setting back
-when it closes. Note that this is compositor-wide: every floating window snaps
-while the preview is up.
+The preview parks against a line set in from the screen edge, not against the
+edge itself, and the same line on every side. Letting go is what places it: mpv
+reports the moment the button comes up, so the window is on its way before you
+have finished releasing, carried the last stretch by the compositor's own move
+animation.
 
-Hyprland's magnet parks a window flush against the edge, which is not where a
-preview wants to sit, and its `monitor_gap` is the distance at which the magnet
-grabs rather than the distance it leaves. So the gap is omavcam's half: when you
-let go, the preview settles into place a fraction of a second later, carried
-there by the compositor's own move animation.
+It has to be that way round. Hyprland owns a window's position for as long as a
+drag is in progress and overwrites anything moved underneath it, so nothing
+outside the compositor can pull a window off its cursor mid-drag. Hyprland's own
+`general:snap` can — turn it on in your config if you like the feel — but it
+parks windows flush against the edge, with no way to inset that line, which is
+not where an overlay belongs.
 
-That gap scales with the screen rather than being a fixed number of pixels —
+The gap scales with the screen rather than being a fixed number of pixels —
 4.5% of the monitor's logical height, between 24 and 96 pixels, which is 40 on a
 1600x900 desktop and 48 on a 4K one at 200% scale. Logical pixels already carry
 the display's scale, so a HiDPI panel gets the same apparent gap instead of a

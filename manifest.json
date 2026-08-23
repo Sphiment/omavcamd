@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sphiment.omavcam",
   "name": "omavcam",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": "Sphiment",
   "license": "MIT",
   "description": "Use an Android phone as a virtual webcam, via scrcpy and v4l2loopback.",
