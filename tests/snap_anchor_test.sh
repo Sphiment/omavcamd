@@ -74,6 +74,27 @@ check "top clears the reserved bar" "$TOP" "$y"
 read -r x _ < <(origin center)
 check "center is centred horizontally" 960 "$x"
 
+printf '\nBars on multiple sides shift every axis, including center\n'
+
+# Offset monitor geometry and four different reserved sides prove that center
+# is the center of the usable rectangle, not the raw monitor with one special
+# top-bar correction bolted on.
+readonly SIDE_SCREEN=(100 50 1600 900 72 30 24 18)
+readonly SIDE_WINDOW=(500 300)
+side_margin=$("$OMAVCAM" __snap-margin 900)
+side_ux=$((100 + 72 + side_margin))
+side_uy=$((50 + 30 + side_margin))
+side_uw=$((1600 - 72 - 24 - 2 * side_margin))
+side_uh=$((900 - 30 - 18 - 2 * side_margin))
+read -r side_x side_y < <("$OMAVCAM" __snap-origin center "${SIDE_SCREEN[@]}" "${SIDE_WINDOW[@]}")
+check "left/right reservations shift horizontal center" \
+  "$((side_ux + (side_uw - SIDE_WINDOW[0]) / 2))" "$side_x"
+check "top/bottom reservations shift vertical center" \
+  "$((side_uy + (side_uh - SIDE_WINDOW[1]) / 2))" "$side_y"
+
+read -r side_x side_y < <("$OMAVCAM" __snap-origin top-left "${SIDE_SCREEN[@]}" "${SIDE_WINDOW[@]}")
+check "top-left clears both reserved sides" "$side_ux $side_uy" "$side_x $side_y"
+
 printf '\nA drop near an anchor snaps to it\n'
 
 # 30px right and 20px up from each anchor: well inside the threshold, which is

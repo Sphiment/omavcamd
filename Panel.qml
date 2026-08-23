@@ -23,6 +23,60 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
+  // The bar object is injected just after Loader finishes constructing this
+  // item. Keep bindings quiet during that short gap; no action can reach this
+  // object before the real singleton replaces it.
+  QtObject {
+    id: unavailableService
+    readonly property bool active: false
+    readonly property bool blockingIssue: false
+    readonly property bool busy: false
+    readonly property var cameras: []
+    readonly property bool camerasLoaded: false
+    readonly property bool camerasDeferred: false
+    readonly property var devices: []
+    readonly property bool hasDevice: false
+    readonly property string lastError: ""
+    readonly property var missingPackages: []
+    readonly property bool needsInstall: false
+    readonly property bool previewOpen: false
+    readonly property var previewOriginal: null
+    readonly property string previewSize: "small"
+    readonly property bool previewSnapEdges: true
+    readonly property bool previewSnapCorners: true
+    readonly property bool previewSnapCenter: true
+    readonly property bool previewSnap: true
+    readonly property string previewSource: "loopback"
+    readonly property string previewSurface: "overlay"
+    readonly property var sizeOptions: []
+    readonly property bool running: false
+    readonly property bool streaming: false
+    signal captureFailed(string message)
+    function setting(name, fallback) { return fallback }
+    function statusText() { return "Checking…" }
+    function applyLive(overrides) {}
+    function changePreviewMode(source, surface) {}
+    function refresh() {}
+    function refreshCameras() {}
+    function runSetup() {}
+    function setPreviewSize(size) {}
+    function setPreviewSnapTargets(edges, corners, center) {}
+    function setPreviewSnapTarget(name, enabled) {}
+    function setPreviewSnapLevel(level) {}
+    function setPreviewSnap(enabled) {}
+    function start() {}
+    function stop() {}
+    function toggle() {}
+    function togglePreview() {}
+  }
+
+  // The plugin service is loaded once by Omarchy and shared by every bar on
+  // every screen. Keeping it out of this per-screen widget is what guarantees
+  // one Qt camera reader and one set of overlay surfaces.
+  readonly property var service: bar && bar.shell
+                               ? (bar.shell.serviceFor(root.moduleName) || unavailableService)
+                               : unavailableService
+
   // nf-md-webcam, from the same Material Design set every neighbouring widget
   // draws from. That matters for more than taste: OpticalGlyph renders at a
   // fixed point size and only corrects centring — it does not scale glyphs to a
@@ -94,7 +148,7 @@ Panel {
     if (!o) return ""
     return "The preview would be " + o.width + "\u00d7" + o.height
          + ", larger than this screen (" + o.screenWidth + "\u00d7" + o.screenHeight
-         + "). It will extend past the edges — drag it by its top-left corner."
+         + "). The part outside the screen will be clipped."
   }
 
   // Applies a preview size, asking first when "original" would overflow.
@@ -107,12 +161,14 @@ Panel {
   }
 
   function togglePreviewSnap() {
-    var enabled = !service.previewSnap
-    // Persisted first so the setting and the running watcher never disagree;
-    // the CLI is told the new value outright, since `settings` here is still
-    // the old one until the write comes back.
-    root.persist({previewSnap: enabled})
-    service.setPreviewSnap(enabled)
+    var all = service.previewSnapEdges && service.previewSnapCorners && service.previewSnapCenter
+    service.setPreviewSnapTargets(!all, !all, !all)
+  }
+
+  function toggleSnapTarget(name) {
+    if (name === "edges") service.setPreviewSnapTarget(name, !service.previewSnapEdges)
+    else if (name === "corners") service.setPreviewSnapTarget(name, !service.previewSnapCorners)
+    else if (name === "center") service.setPreviewSnapTarget(name, !service.previewSnapCenter)
   }
 
   function nextPreviewSize(step) {
@@ -131,15 +187,9 @@ Panel {
     bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
-  Service {
-    id: service
-    settings: root.settings
-    // A plugin directory is not on PATH, so resolve our own CLI from this
-    // file's location and strip the URL scheme Process cannot use.
-    cli: String(Qt.resolvedUrl("bin/omavcam")).replace(/^file:\/\//, "")
-    onCaptureFailed: function (message) {
-      errorText.visible = true
-    }
+  Connections {
+    target: root.service
+    function onCaptureFailed(message) { errorText.visible = true }
   }
 
   onOpenedChanged: {
@@ -164,6 +214,14 @@ Panel {
     function toggleCapture(): void { service.toggle() }
     function togglePreview(): void { service.togglePreview() }
     function togglePreviewSnap(): void { root.togglePreviewSnap() }
+    function cameraState(): string {
+      return JSON.stringify({ loaded: service.camerasLoaded,
+                              deferred: service.camerasDeferred,
+                              count: service.cameras.length,
+                              hasDevice: service.hasDevice,
+                              running: service.running,
+                              streaming: service.streaming })
+    }
   }
 
   BarIconButton {
@@ -454,6 +512,16 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
+
+          Text {
+            width: parent.width
+            visible: service.camerasDeferred
+            text: "Camera details will refresh after the stream stops."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
         }
 
         // ---------- Preview ----------
@@ -488,7 +556,7 @@ Panel {
 
               PanelToolTip {
                 visible: previewSwitch.containsMouse
-                text: service.previewOpen ? "Close the preview window" : "Show what the other side sees"
+                text: service.previewOpen ? "Close the preview" : "Show what the other side sees"
                 fontFamily: root.fontFamily
               }
             }
@@ -509,42 +577,56 @@ Panel {
             onChanged: function (value) { root.choosePreviewSize(value) }
           }
 
-          // Shown whether or not the preview is open, unlike the size buttons:
-          // it is a preference about what dragging does rather than a command,
-          // and `e` sets it from the keyboard at any time.
-          Item {
+          Column {
             width: parent.width
-            implicitHeight: Math.max(snapLabel.implicitHeight, snapSwitch.implicitHeight)
+            spacing: Style.space(7)
 
-            Text {
-              id: snapLabel
-              anchors.left: parent.left
-              anchors.right: snapSwitch.left
-              anchors.rightMargin: Style.space(12)
-              anchors.verticalCenter: parent.verticalCenter
-              text: "Snap to edges"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              elide: Text.ElideRight
+            PanelSectionHeader {
+              text: "SNAP TARGETS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
             }
 
-            ToggleSwitch {
-              id: snapSwitch
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              checked: service.previewSnap
-              busy: service.busy
+            Toggle {
+              width: parent.width
+              label: "All"
+              description: "Every magnetic point"
+              checked: service.previewSnapEdges
+                       && service.previewSnapCorners
+                       && service.previewSnapCenter
               foreground: root.foreground
-              onToggled: root.togglePreviewSnap()
+              fontFamily: root.fontFamily
+              onClicked: root.togglePreviewSnap()
+            }
 
-              PanelToolTip {
-                visible: snapSwitch.containsMouse
-                text: service.previewSnap
-                      ? "Let the preview be dragged anywhere"
-                      : "Park the preview on the nearest edge, corner, or centre"
-                fontFamily: root.fontFamily
-              }
+            Toggle {
+              width: parent.width
+              label: "Edges"
+              description: "Top, right, bottom, and left middles"
+              checked: service.previewSnapEdges
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.toggleSnapTarget("edges")
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Corners"
+              description: "All four screen corners"
+              checked: service.previewSnapCorners
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.toggleSnapTarget("corners")
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Center"
+              description: "The middle of the screen"
+              checked: service.previewSnapCenter
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.toggleSnapTarget("center")
             }
           }
 
@@ -558,10 +640,22 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             onChanged: function (value) {
-              root.persist({previewSource: value})
-              // The two sources are different windows owned by different
-              // processes, so an open preview has to be re-made, not retargeted.
-              service.reopenPreview(value)
+              service.changePreviewMode(value, service.previewSurface)
+            }
+          }
+
+          ButtonGroup {
+            width: parent.width
+            visible: service.previewSource === "loopback"
+            options: [
+              {value: "overlay", label: "Overlay"},
+              {value: "window", label: "Window"}
+            ]
+            value: service.previewSurface
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onChanged: function (value) {
+              service.changePreviewMode(service.previewSource, value)
             }
           }
 
@@ -569,9 +663,11 @@ Panel {
             width: parent.width
             text: {
               if (service.previewSize === "original")
-                return "Original is the stream's real pixel size, so it can be larger than the screen. Drag it from its top-left corner."
+                return "Original is the stream's real pixel size, so it can be larger than the screen."
               return service.previewSource === "loopback"
-                     ? "Shows the virtual camera itself — exactly what the other side sees."
+                     ? (service.previewSurface === "overlay"
+                        ? "Drawn by omavcam itself, with smooth dragging between screens."
+                        : "An mpv window showing exactly what the other side sees.")
                      : "Shows scrcpy's window, which can also control the phone. Switching it restarts the stream."
             }
             color: root.dim

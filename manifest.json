@@ -2,16 +2,18 @@
   "schemaVersion": 1,
   "id": "sphiment.omavcam",
   "name": "omavcam",
-  "version": "0.5.1",
+  "version": "0.8.4",
   "author": "Sphiment",
   "license": "MIT",
   "description": "Use an Android phone as a virtual webcam, via scrcpy and v4l2loopback.",
   "homepage": "https://github.com/Sphiment/omavcam",
   "kinds": [
-    "bar-widget"
+    "bar-widget",
+    "service"
   ],
   "entryPoints": {
-    "barWidget": "Panel.qml"
+    "barWidget": "Panel.qml",
+    "service": "Service.qml"
   },
   "barWidget": {
     "displayName": "omavcam",
@@ -28,7 +30,13 @@
       "refreshIntervalSec": 5,
       "hideWhenIdle": false,
       "previewSource": "loopback",
-      "previewSnap": true
+      "previewSurface": "overlay",
+      "previewSize": "small",
+      "previewSnapEdges": true,
+      "previewSnapCorners": true,
+      "previewSnapCenter": true,
+      "previewAnchor": "bottom-right",
+      "previewScreen": ""
     },
     "schema": [
       {
@@ -76,11 +84,48 @@
         "defaultValue": "loopback"
       },
       {
-        "key": "previewSnap",
+        "key": "previewSnapEdges",
         "type": "boolean",
-        "label": "Snap the preview to edges",
-        "description": "Dragging the preview near a corner, an edge, or the centre parks it there. Drop it anywhere else and it stays where you put it.",
+        "label": "Snap to edge middles",
+        "description": "Enable the top, right, bottom, and left edge-centre targets.",
         "defaultValue": true
+      },
+      {
+        "key": "previewSnapCorners",
+        "type": "boolean",
+        "label": "Snap to corners",
+        "description": "Enable all four corner targets.",
+        "defaultValue": true
+      },
+      {
+        "key": "previewSnapCenter",
+        "type": "boolean",
+        "label": "Snap to centre",
+        "description": "Enable the target in the middle of the screen.",
+        "defaultValue": true
+      },
+      {
+        "key": "previewSurface",
+        "type": "string",
+        "label": "Virtual cam preview",
+        "description": "Draw the virtual-camera preview in omavcam's smooth overlay, or retain the separate mpv window.",
+        "options": [
+          "overlay",
+          "window"
+        ],
+        "defaultValue": "overlay"
+      },
+      {
+        "key": "previewSize",
+        "type": "string",
+        "label": "Preview size",
+        "options": [
+          "small",
+          "medium",
+          "large",
+          "original"
+        ],
+        "defaultValue": "small"
       },
       {
         "key": "serial",
