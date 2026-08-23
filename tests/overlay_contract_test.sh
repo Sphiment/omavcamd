@@ -109,7 +109,9 @@ seamless_border=no
 [[ $overlay == *'id: videoFrame'*'anchors.fill: parent'* ]] &&
   [[ $overlay == *'id: borderChrome'*'z: 1'*'borderSpec: tile.themeBorderSpec'* ]] &&
   [[ $overlay == *'id: pointer'*'z: 2'* ]] &&
-  [[ $overlay != *'anchors.topMargin: tile.borderTop'* ]] && seamless_border=yes
+  [[ $overlay != *'anchors.topMargin: tile.borderTop'* ]] &&
+  [[ $overlay != *'layer.effect: MultiEffect'* ]] &&
+  [[ $overlay != *'maskSource: videoMask'* ]] && seamless_border=yes
 check "video extends beneath the top-painted border without an inner seam" "$seamless_border"
 
 active_workarea=no

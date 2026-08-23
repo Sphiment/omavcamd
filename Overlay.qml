@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Effects
 import QtMultimedia
 import Quickshell
 import Quickshell.Io
@@ -498,30 +497,13 @@ Item {
                                                   Color.accent,
                                                   Math.max(1, Style.space(2)))
 
-        // The video fills the tile and the border is painted over it below.
-        // Insetting video to the border's nominal inner edge exposes a moving
-        // one-pixel seam when Qt antialiases that edge at fractional positions.
-        Rectangle {
-          id: videoMask
-          anchors.fill: videoFrame
-          radius: videoFrame.radius
-          color: "white"
-          visible: false
-          layer.enabled: tile.radius > 0 && root.previewActive && overlay.ownsPreview
-        }
-
+        // Keep QtMultimedia's video on the direct scenegraph path. V4L2 frames
+        // may use an external/zero-copy texture which becomes black when this
+        // subtree is redirected through an offscreen layer for a mask. The
+        // themed rounded border remains above the video and hides its edge.
         Item {
           id: videoFrame
           anchors.fill: parent
-          readonly property real radius: tile.radius
-          layer.enabled: tile.radius > 0 && root.previewActive && overlay.ownsPreview
-          layer.smooth: true
-          layer.effect: MultiEffect {
-            maskEnabled: true
-            maskSource: videoMask
-            maskThresholdMin: 0.3
-            maskSpreadAtMin: 0.15
-          }
 
           VideoOutput {
             id: output

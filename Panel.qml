@@ -220,7 +220,14 @@ Panel {
                               count: service.cameras.length,
                               hasDevice: service.hasDevice,
                               running: service.running,
-                              streaming: service.streaming })
+                              streaming: service.streaming,
+                              overlayMode: service.overlayMode,
+                              overlayOpen: service.overlayPreviewOpen,
+                              overlayReady: service.overlayCaptureReady,
+                              loopbackOwned: service.loopbackDeviceOwned,
+                              loopbackPath: service.loopbackDevicePath,
+                              capturePath: String(service.capture.device || ""),
+                              multimediaAvailable: service.multimediaAvailable })
     }
   }
 
