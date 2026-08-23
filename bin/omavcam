@@ -59,6 +59,8 @@ readonly META_FILE="$STATE_DIR/capture.json"
 readonly LOG_FILE="$STATE_DIR/capture.log"
 readonly PREVIEW_PID_FILE="$STATE_DIR/preview.pid"
 readonly PREVIEW_WATCH_PID_FILE="$STATE_DIR/preview-watch.pid"
+readonly PREVIEW_INPUT_CONF="$STATE_DIR/preview-input.conf"
+readonly PREVIEW_DRAG_FILE="$STATE_DIR/preview.drag"
 readonly PREVIEW_SIZE_FILE="$STATE_DIR/preview.size"
 
 # STATE_DIR lives under XDG_RUNTIME_DIR, which is tmpfs: nothing in it survives
@@ -105,6 +107,13 @@ readonly PREVIEW_WATCH_ACTIVE=0.12
 # position for as long as a drag is in progress and overwrites anything written
 # underneath it, so the snap has to wait for the drag to be over.
 readonly PREVIEW_WATCH_SETTLE=2
+
+# How old the mark left by a click may be and still be taken as the start of the
+# drag that is now under way. It only has to cover the gap between pressing the
+# button and moving the mouse; five seconds is generous for that and short
+# enough that a click, a pause, and then a Super drag is not mistaken for one
+# gesture.
+readonly PREVIEW_DRAG_GRACE=5
 
 PREVIEW_SNAP="${OMAVCAM_PREVIEW_SNAP:-}"
 readonly PREVIEW_SNAP
@@ -1412,27 +1421,45 @@ preview_snap_word() {
   fi
 }
 
-# Whether a Super key is held right now. Hyprland reports no drag events, but
-# its Lua API will say which keys are down, and that is enough to tell the two
-# ways of moving a window apart: with Super it is the compositor dragging the
-# window for you, without it the window is being dragged by its own face.
+# Whether the drag now under way is one that should snap. The two ways of moving
+# the preview are told apart at the source rather than guessed at: mpv marks the
+# moment its own window is grabbed, and a Super drag is taken by the compositor
+# before mpv is told anything at all, so it leaves no mark.
 #
-# Unsupported and unanswered both count as "not held". On a Hyprland with no Lua
-# API there is nothing to ask, and refusing to snap on a maybe would turn the
-# feature off rather than protect it.
-super_held() {
-  local answer
-  answer=$(hyprctl repl 'return hl.is_key_down("Super_L") or hl.is_key_down("Super_R")' 2>/dev/null) || return 1
-  [[ $answer == true ]]
+# Hyprland cannot answer this. It reports no drag events, nothing about which
+# mechanism moved a window, and its Lua `is_key_down` does not carry modifiers —
+# all three were tried before settling on asking the client that knows.
+#
+# The scrcpy preview has no mark and no plain drag either, since clicks on it go
+# to the phone: Super is the only way to move that window, so every drag counts.
+drag_should_snap() {
+  [[ $PREVIEW_SOURCE == scrcpy ]] && return 0
+
+  local marked
+  marked=$(stat -c %Y "$PREVIEW_DRAG_FILE" 2>/dev/null) || return 1
+  [[ $marked =~ ^[0-9]+$ ]] || return 1
+  ((EPOCHSECONDS - marked <= PREVIEW_DRAG_GRACE))
 }
 
-# Whether this preview can be dragged without Super in the first place. mpv
-# hands a click on its picture to the compositor as a window move, so Super has
-# something to mean: not this one. scrcpy sends the click to the phone instead,
-# so Super+drag is the only way to move that window — reading Super as "leave it
-# alone" there would switch snapping off rather than qualify it.
-preview_drags_without_super() {
-  [[ $PREVIEW_SOURCE != scrcpy ]]
+# mpv is given its own bindings, written fresh each time the preview opens.
+#
+# Binding the button explicitly is also what makes a plain drag work at all:
+# left to itself, mpv decides whether a click was meant to move the window, and
+# that decision is not one the preview should depend on.
+preview_write_input_conf() {
+  local marker
+  marker=$(command -v touch) || marker=""
+
+  {
+    printf '# Written by omavcam every time the preview opens. Edits are lost.\n'
+    if [[ -n $marker ]]; then
+      printf 'MBTN_LEFT run "%s" "%s"; begin-vo-dragging\n' "$marker" "$PREVIEW_DRAG_FILE"
+    else
+      printf 'MBTN_LEFT begin-vo-dragging\n'
+    fi
+    # Without this a slightly enthusiastic drag puts the preview fullscreen.
+    printf 'MBTN_LEFT_DBL ignore\n'
+  } >"$PREVIEW_INPUT_CONF"
 }
 
 preview_snap_save() {
@@ -1505,7 +1532,7 @@ preview_watch_loop() {
 
   local x y width height monitor_id address
   local previous="" settled="" resolved=""
-  local still=0 interval="$PREVIEW_WATCH_IDLE" free_drag=false
+  local still=0 interval="$PREVIEW_WATCH_IDLE" snapping_drag=unknown
 
   while preview_snap_enabled; do
     if ! read -r x y width height monitor_id address < <(preview_geometry); then
@@ -1523,13 +1550,12 @@ preview_watch_loop() {
       still=0
       interval="$PREVIEW_WATCH_ACTIVE"
 
-      # Asked while the window is still moving, because by the time it settles
-      # the key is often already up. Asked once per drag, too: the answer
-      # cannot change from "Super" to "not Super" halfway through a drag that
-      # Super started.
-      if [[ $free_drag == false && -n $previous ]] &&
-        preview_drags_without_super && super_held; then
-        free_drag=true
+      # Settled at the first sign of movement, while the mark left by the click
+      # that began the drag is still fresh, and consumed there: one click can
+      # only answer for one drag.
+      if [[ $snapping_drag == unknown && -n $previous ]]; then
+        if drag_should_snap; then snapping_drag=yes; else snapping_drag=no; fi
+        rm -f "$PREVIEW_DRAG_FILE"
       fi
     fi
     previous="$current"
@@ -1539,18 +1565,17 @@ preview_watch_loop() {
     if ((still == PREVIEW_WATCH_SETTLE)) && [[ $current != "$settled" ]]; then
       settled="$current"
 
-      if [[ $free_drag == true ]]; then
-        # Dragged with Super: the position is the point of the gesture, and the
-        # remembered anchor is left alone rather than overwritten by a place
-        # that is deliberately not one.
-        free_drag=false
-      elif resolved=$(preview_snap_now); then
+      # A Super drag ends here: the position is the whole point of the gesture,
+      # and the remembered anchor is left alone rather than overwritten by a
+      # place that is deliberately not one.
+      if [[ $snapping_drag == yes ]] && resolved=$(preview_snap_now); then
         # The window is about to move, which reads as motion on the next tick.
         # Recording where it was sent stops that from looking like a new drag.
         read -r _ x y <<<"$resolved"
         previous="$x $y $width $height $monitor_id"
         settled="$previous"
       fi
+      snapping_drag=unknown
     fi
 
     ((still > PREVIEW_WATCH_SETTLE)) && interval="$PREVIEW_WATCH_IDLE"
@@ -1751,6 +1776,8 @@ preview_start() {
 
   ensure_state_dir
   apply_preview_rules
+  rm -f "$PREVIEW_DRAG_FILE"
+  preview_write_input_conf
 
   # Reading the node rather than the phone means the preview shows exactly the
   # frames the meeting app receives — same crop, same orientation, same lag.
@@ -1758,7 +1785,7 @@ preview_start() {
     --profile=low-latency --untimed --no-cache \
     --title="$PREVIEW_TITLE" --wayland-app-id="$(preview_app_id "$size_name")" \
     --no-border --no-audio --no-osc --osd-level=0 --really-quiet \
-    --window-dragging=yes \
+    --window-dragging=yes --input-conf="$PREVIEW_INPUT_CONF" \
     >/dev/null 2>&1 &
   printf '%s\n' "$!" >"$PREVIEW_PID_FILE"
 
@@ -1780,6 +1807,7 @@ wait_for_preview() {
 
 preview_stop() {
   preview_watch_stop
+  rm -f "$PREVIEW_DRAG_FILE"
 
   if [[ $PREVIEW_SOURCE == scrcpy ]]; then
     capture_running && restart_capture_with_window false

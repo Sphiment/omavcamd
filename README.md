@@ -167,6 +167,12 @@ drag is in progress and overwrites anything moved underneath it, so there is no
 sliding-into-place mid-drag to be had; what you get is the compositor's own move
 animation carrying it the last stretch.
 
+The two drags are told apart by mpv rather than guessed at: a plain click lands
+on the preview's own window, so mpv marks it and starts the move itself, while a
+`Super` drag is taken by the compositor before mpv hears anything at all. Which
+also means the preview's mouse bindings are omavcam's own while it is open — a
+double click will not put it fullscreen.
+
 The scrcpy preview is the exception: clicks on it go to the phone, so `Super`
 is the only way to move that window and snapping stays on for it.
 
