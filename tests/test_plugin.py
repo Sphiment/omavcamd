@@ -45,7 +45,7 @@ class PluginTests(unittest.TestCase):
             'send("preview"', "daemonState.preview_style",
             "if (message.ok) syncPreviewStyle()", 'known.transport === "wireless"',
             "item.phone.serial === known.hardware_id", "FloatingWindow",
-            'title: "omavcam reconnecting"',
+            'title: "vcamd reconnecting"',
             "visible: root.reconnecting && root.previewing",
             "activeColor: root.reconnecting ? root.urgent",
         ):
@@ -60,7 +60,7 @@ class PluginTests(unittest.TestCase):
 
     def test_missing_engine_shows_a_guide(self):
         panel = (PLUGIN / "Panel.qml").read_text()
-        self.assertIn("omavcam-git", panel)
+        self.assertIn("vcamd-git", panel)
         self.assertIn("pacman -U", panel)
         self.assertIn("daemonState.missing", panel)
         self.assertNotRegex(panel, re.compile(r"\bProcess\s*\{"))

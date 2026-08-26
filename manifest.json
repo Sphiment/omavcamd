@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Sphiment",
   "license": "MIT",
-  "description": "Control the omavcam daemon from the Omarchy bar.",
+  "description": "Control the vcamd daemon from the Omarchy bar.",
   "homepage": "https://github.com/Sphiment/omavcam",
   "kinds": ["bar-widget"],
   "entryPoints": {"barWidget": "plugin/Panel.qml"},

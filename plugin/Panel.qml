@@ -59,7 +59,7 @@ Panel {
     return width > 0 && height > 0 ? Math.max(1, Math.round(640 * height / width)) : 360
   }
 
-  // What omavcam needs and has not got, in the daemon's own words: each entry
+  // What vcamd needs and has not got, in the daemon's own words: each entry
   // is a `what` and the `package` that supplies it. The daemon re-checks on
   // every pass, so this empties itself once the install happens.
   readonly property var missing: daemonState ? (daemonState.missing || []) : []
@@ -117,8 +117,8 @@ Panel {
   // Where the daemon's socket is, by the same rule the daemon uses. Named once
   // because the Socket below and the install offer must not disagree about
   // which path went unanswered.
-  readonly property string socketPath: Quickshell.env("OMAVCAM_SOCKET")
-    || (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omavcam.sock"
+  readonly property string socketPath: Quickshell.env("VCAMD_SOCKET")
+    || (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/vcamd.sock"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -224,7 +224,7 @@ Panel {
     if (connection.state === "connecting") return "Connecting to " + connection.phone.name
     if (connection.state === "connected") return connection.phone.name + " connected"
     if (connection.state === "reconnecting") return "Reconnecting to " + connection.phone.name + " — last frame held"
-    if (connection.state === "needs_pairing") return "Wireless pairing needed — run omavcam pair"
+    if (connection.state === "needs_pairing") return "Wireless pairing needed — run vcamd pair"
     if (connection.state === "pairing_failed") {
       if (connection.reason === "wrong_code") return "Wireless pairing failed — wrong code"
       if (connection.reason === "wrong_address") return "Wireless pairing failed — wrong pairing address"
@@ -249,8 +249,8 @@ Panel {
       if (retry.interval === retry.firstInterval) return ""
       return "No engine answered " + root.socketPath + ".\n"
         + "Install the engine:\n"
-        + "sudo pacman -U https://github.com/Sphiment/omavcam2/releases/latest/download/omavcam-git-x86_64.pkg.tar.zst\n"
-        + "Already installed? systemctl --user status omavcam.socket omavcam.service"
+        + "sudo pacman -U https://github.com/Sphiment/vcamd/releases/latest/download/vcamd-git-x86_64.pkg.tar.zst\n"
+        + "Already installed? systemctl --user status vcamd.socket vcamd.service"
     }
     return root.missing.map(function (item) {
       return "Missing " + item.what + "\n  " + item.install
@@ -260,7 +260,7 @@ Panel {
   function captureWords() {
     if (reconnecting && capturing) return "Reconnecting to " + daemonState.capture.phone.name + " — last frame held"
     if (capturing) return daemonState.capture.size + " from " + daemonState.capture.phone.name
-    return "Off — omavcam is in no camera list"
+    return "Off — vcamd is in no camera list"
   }
 
   function tooltipWords() {
@@ -346,7 +346,7 @@ Panel {
   FloatingWindow {
     id: reconnectPreview
     visible: root.reconnecting && root.previewing
-    title: "omavcam reconnecting"
+    title: "vcamd reconnecting"
     implicitWidth: 640
     implicitHeight: root.reconnectPreviewHeight
     color: Color.background
