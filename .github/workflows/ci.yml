@@ -2,146 +2,36 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 jobs:
-  manifest:
-    name: Validate manifest
+  plugin:
+    name: Wrapper contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Validate the manifest and thin-client boundary
+        run: python -m unittest discover -s tests -v
 
-      - name: manifest.json is valid JSON
-        run: jq -e . manifest.json > /dev/null
-
-      # Mirrors the checks in omarchy-plugin-validate, which is not available on
-      # a runner: schemaVersion, required fields, a safe id outside the reserved
-      # namespace, and an entry point on disk for every kind that needs one.
-      - name: Manifest matches the Omarchy plugin schema
+  manifest:
+    name: Omarchy manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate required fields and entry points
         run: |
           set -euo pipefail
-
-          jq -e '.schemaVersion == 1' manifest.json > /dev/null \
-            || { echo "schemaVersion must be the number 1"; exit 1; }
-
-          for field in id name version kinds entryPoints; do
-            jq -e --arg f "$field" 'has($f)' manifest.json > /dev/null \
-              || { echo "manifest missing required field '$field'"; exit 1; }
-          done
-
-          id=$(jq -r '.id' manifest.json)
-          [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
-            || { echo "invalid plugin id '$id'"; exit 1; }
-          [[ $id != omarchy.* ]] \
-            || { echo "id '$id' uses the reserved omarchy.* namespace"; exit 1; }
-
-          jq -e '(.kinds | type) == "array" and (.kinds | length) > 0' manifest.json > /dev/null \
-            || { echo "'kinds' must be a non-empty array"; exit 1; }
-
-          while IFS= read -r ep; do
-            [[ $ep != /* && $ep != *".."* ]] \
-              || { echo "unsafe entry point path '$ep'"; exit 1; }
-            [[ -f $ep ]] \
-              || { echo "entry point file not found: '$ep'"; exit 1; }
-          done < <(jq -r '.entryPoints[]' manifest.json)
-
-          for pair in bar:bar bar-widget:barWidget menu:menu overlay:overlay \
-                      panel:panel service:service; do
-            kind=${pair%%:*}
-            key=${pair##*:}
-            jq -e --arg k "$kind" '(.kinds | index($k)) != null' manifest.json > /dev/null || continue
-            jq -e --arg k "$key" '.entryPoints | has($k)' manifest.json > /dev/null \
-              || { echo "kind '$kind' requires entryPoints.$key"; exit 1; }
-          done
-
-      # The shell refuses to load a plugin folder containing a symlink, since a
-      # symlink could point out of the trusted plugins directory once installed.
-      - name: No symlinks in the plugin folder
-        run: |
+          jq -e '
+            .schemaVersion == 1 and
+            .id == "sphiment.omavcam" and
+            .name == "omavcam" and
+            (.kinds | index("bar-widget")) != null and
+            (.entryPoints.barWidget | type) == "string"
+          ' manifest.json >/dev/null
+          entry_point=$(jq -r '.entryPoints.barWidget' manifest.json)
+          [[ $entry_point != /* && $entry_point != *".."* && -f $entry_point ]]
           link=$(find . -name .git -prune -o -type l -print -quit)
           [[ -z $link ]] || { echo "symlinks are not allowed: $link"; exit 1; }
-
-  glyphs:
-    name: Bar icon glyph
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # BarIconButton hides a button whose text is empty, so an icon string that
-      # loses its glyph removes the widget from the bar with no error anywhere.
-      # That shipped once, undetected across two phases, because every check was
-      # aimed at the panel rather than the bar.
-      - name: The icon resolves to a glyph
-        run: |
-          grep -E 'readonly property string icon:' Panel.qml
-          # Either a non-empty literal, or a code point built explicitly — the
-          # latter is how anything above the BMP has to be written, since a \u
-          # escape only carries four hex digits.
-          grep -qE 'readonly property string icon: *("[^"]+"|String\.fromCodePoint\(0x[0-9a-fA-F]+\))' Panel.qml \
-            || { echo "bar icon is empty — the widget would not render"; exit 1; }
-
-  model:
-    name: Model.js helpers
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-      - name: Run helper tests
-        run: deno run --allow-read tests/model_test.js
-
-  video-nr:
-    name: OMAVCAM_VIDEO_NR validation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # OMAVCAM_VIDEO_NR reaches a root-owned modprobe config that is then
-      # parsed with privileges, so the bound on it is a privilege boundary
-      # rather than a nicety, and is worth a gate of its own.
-      - name: Only a bounded decimal is accepted
-        run: tests/video_nr_test.sh
-
-  snap-geometry:
-    name: Preview snap geometry
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # Where the preview lands is pure arithmetic over numbers hyprctl reports,
-      # so all of it can be checked on a runner with no compositor — and it is
-      # the part most likely to break quietly, since a wrong anchor still moves
-      # the window somewhere plausible.
-      - name: Anchors, thresholds and oversized windows
-        run: tests/snap_anchor_test.sh
-
-  snap-setting:
-    name: Snapping preference
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # The panel passes the setting in the environment and the CLI saves it to
-      # a file, so which of the two wins decides whether the toggle appears to
-      # do nothing. No compositor needed to check that.
-      - name: The preference is saved, read back, and overridable
-        run: tests/snap_setting_test.sh
-
-  shellcheck:
-    name: Shellcheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run shellcheck over bin/ and tests/
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          scripts=(bin/* tests/*.sh)
-          if (( ${#scripts[@]} == 0 )); then
-            echo "no scripts in bin/ yet"
-            exit 0
-          fi
-          shellcheck "${scripts[@]}"

@@ -2,108 +2,18 @@
   "schemaVersion": 1,
   "id": "sphiment.omavcam",
   "name": "omavcam",
-  "version": "0.5.1",
+  "version": "1.0.0",
   "author": "Sphiment",
   "license": "MIT",
-  "description": "Use an Android phone as a virtual webcam, via scrcpy and v4l2loopback.",
+  "description": "Control the omavcam daemon from the Omarchy bar.",
   "homepage": "https://github.com/Sphiment/omavcam",
-  "kinds": [
-    "bar-widget"
-  ],
-  "entryPoints": {
-    "barWidget": "Panel.qml"
-  },
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "plugin/Panel.qml"},
   "barWidget": {
     "displayName": "omavcam",
-    "description": "Stream an Android phone's camera or screen into a virtual webcam.",
-    "category": "Media",
+    "description": "Start and stop the phone webcam, toggle its preview, and see its connection state.",
+    "category": "Hardware",
     "allowMultiple": false,
-    "defaultSection": "right",
-    "defaults": {
-      "facing": "front",
-      "cameraId": "",
-      "size": "",
-      "fps": "",
-      "serial": "",
-      "refreshIntervalSec": 5,
-      "hideWhenIdle": false,
-      "previewSource": "loopback",
-      "previewSnap": true
-    },
-    "schema": [
-      {
-        "key": "facing",
-        "type": "string",
-        "label": "Camera",
-        "description": "Which camera to use when no explicit camera id is set.",
-        "options": [
-          "front",
-          "back",
-          "external"
-        ],
-        "defaultValue": "front"
-      },
-      {
-        "key": "cameraId",
-        "type": "string",
-        "label": "Camera id",
-        "description": "Explicit camera id. Overrides the camera setting when set.",
-        "defaultValue": ""
-      },
-      {
-        "key": "size",
-        "type": "string",
-        "label": "Resolution",
-        "description": "Must be a resolution the camera offers; leave empty for its default.",
-        "defaultValue": ""
-      },
-      {
-        "key": "fps",
-        "type": "string",
-        "label": "Frame rate",
-        "description": "Capture frame rate. Leave empty for the camera's default.",
-        "defaultValue": ""
-      },
-      {
-        "key": "previewSource",
-        "type": "string",
-        "label": "Preview shows",
-        "description": "loopback shows the virtual camera itself; scrcpy shows scrcpy's own window, which can also control the phone.",
-        "options": [
-          "loopback",
-          "scrcpy"
-        ],
-        "defaultValue": "loopback"
-      },
-      {
-        "key": "previewSnap",
-        "type": "boolean",
-        "label": "Snap the preview to edges",
-        "description": "Dragging the preview near a corner, an edge, or the centre parks it there. Drop it anywhere else and it stays where you put it.",
-        "defaultValue": true
-      },
-      {
-        "key": "serial",
-        "type": "string",
-        "label": "Phone serial",
-        "description": "Which phone to use when more than one is connected.",
-        "defaultValue": ""
-      },
-      {
-        "key": "refreshIntervalSec",
-        "type": "integer",
-        "label": "Refresh interval (seconds)",
-        "min": 2,
-        "max": 120,
-        "step": 1,
-        "defaultValue": 5
-      },
-      {
-        "key": "hideWhenIdle",
-        "type": "boolean",
-        "label": "Hide when no phone is connected",
-        "defaultValue": false
-      }
-    ]
+    "defaultSection": "right"
   }
 }
