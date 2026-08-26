@@ -18,8 +18,8 @@ import qs.Ui
 // never here: the frequent action has to be instant.
 Panel {
   id: root
-  moduleName: "omavcam"
-  ipcTarget: "omavcam"
+  moduleName: "omavcamd"
+  ipcTarget: "omavcamd"
 
   // The protocol the daemon speaks, from src/protocol.rs. A mismatch is
   // reported rather than misparsed.
@@ -264,9 +264,9 @@ Panel {
   }
 
   function tooltipWords() {
-    if (reconnecting && capturing) return "omavcam — reconnecting to " + daemonState.capture.phone.name
-    if (capturing) return "omavcam — capturing from " + daemonState.capture.phone.name
-    return "omavcam — " + connectionWords()
+    if (reconnecting && capturing) return "omavcamd — reconnecting to " + daemonState.capture.phone.name
+    if (capturing) return "omavcamd — capturing from " + daemonState.capture.phone.name
+    return "omavcamd — " + connectionWords()
   }
 
   // nf-md-video (U+F03D), nf-fa-warning (U+F071), nf-md-video_off (U+F0568):
@@ -425,7 +425,7 @@ Panel {
 
         // ---------- the light, and what it is saying ----------
         PanelHero {
-          title: "omavcam"
+          title: "omavcamd"
           meta: root.connectionWords()
           foreground: root.foreground
           fontFamily: root.fontFamily

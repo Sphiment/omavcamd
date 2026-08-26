@@ -1,4 +1,4 @@
-# omavcam
+# omavcamd
 
 The Omarchy wrapper for the `vcamd` daemon. It adds a bar widget for starting
 and stopping capture, choosing a phone, toggling the preview, and seeing
@@ -31,7 +31,7 @@ systemctl --user start vcamd.socket
 Then install this wrapper:
 
 ```sh
-omarchy plugin add https://github.com/Sphiment/omavcam.git --enable
+omarchy plugin add https://github.com/Sphiment/omavcamd.git --enable
 ```
 
 `--enable` interactively asks where to place the widget in the bar. On the
@@ -48,7 +48,7 @@ anything itself.
 Remove the wrapper without touching the engine:
 
 ```sh
-omarchy plugin remove sphiment.omavcam
+omarchy plugin remove sphiment.omavcamd
 ```
 
 To remove both halves:
@@ -56,7 +56,7 @@ To remove both halves:
 ```sh
 systemctl --user stop vcamd.socket vcamd.service
 sudo pacman -Rns vcamd-git
-omarchy plugin remove sphiment.omavcam
+omarchy plugin remove sphiment.omavcamd
 ```
 
 ## Architecture

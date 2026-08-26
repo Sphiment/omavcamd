@@ -26,8 +26,8 @@ jobs:
           set -euo pipefail
           jq -e '
             .schemaVersion == 1 and
-            .id == "sphiment.omavcam" and
-            .name == "omavcam" and
+            .id == "sphiment.omavcamd" and
+            .name == "omavcamd" and
             (.kinds | index("bar-widget")) != null and
             (.entryPoints.barWidget | type) == "string"
           ' manifest.json >/dev/null

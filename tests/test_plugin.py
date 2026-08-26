@@ -20,7 +20,7 @@ class PluginTests(unittest.TestCase):
     def test_manifest_names_safe_files_present_in_the_clone(self):
         manifest = json.loads((REPO / "manifest.json").read_text())
         self.assertEqual(manifest["schemaVersion"], 1)
-        self.assertEqual(manifest["id"], "sphiment.omavcam")
+        self.assertEqual(manifest["id"], "sphiment.omavcamd")
         self.assertEqual(manifest["kinds"], ["bar-widget"])
         entry_points = manifest["entryPoints"]
         self.assertTrue(entry_points["barWidget"].endswith(".qml"))
